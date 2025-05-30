@@ -6,6 +6,7 @@ let currentPlayerName = '';
 let currentChosenColorDisplay = ''; // For displaying the active color after a Wild
 let playersList = [];
 let playDirectionDisplay = '';
+let awaiting_color_choice_frontend = false; // To manage UI state for color picking
 // let messageFromServer = ""; // Optional: For displaying messages from server
 
 class UnoCard {
@@ -18,6 +19,7 @@ class UnoCard {
 // Global game layout variables
 const HAND_CARD_WIDTH = 100;
 const HAND_CARD_HEIGHT = 150;
+const HAND_CARD_SPACING = 10; // Define spacing globally for consistency
 const DECK_X = 200; // X position for the deck
 let DISCARD_X; // Will be calculated in setup
 
@@ -36,40 +38,26 @@ async function fetchAndUpdateGameState() {
     const gameState = await response.json();
     console.log("Fetched game state:", gameState); // For debugging
 
-    // Update player's hand
-    if (gameState.player_hand) {
-      playerHand = gameState.player_hand.map(cardData => new UnoCard(cardData.color, cardData.value));
-    } else {
-      playerHand = [new UnoCard('grey', 'ErrorP')]; // Fallback
-      console.error("Player hand data missing in fetched state.");
-    }
+    if (gameState.player_hand) playerHand = gameState.player_hand.map(cardData => new UnoCard(cardData.color, cardData.value));
+    else { playerHand = [new UnoCard('grey', 'ErrorP')]; console.error("Player hand data missing in fetched state."); }
 
-    // Update discard pile top card
     if (gameState.discard_pile_top_card && gameState.discard_pile_top_card.color && gameState.discard_pile_top_card.value) {
       discardTopCard = new UnoCard(gameState.discard_pile_top_card.color, gameState.discard_pile_top_card.value);
-    } else {
-      // This case might be valid if discard pile is truly empty, though not in standard Uno start
-      discardTopCard = null; 
-      console.warn("Discard pile top card data missing or incomplete in fetched state. Setting to null.");
-    }
+    } else { discardTopCard = null; console.warn("Discard pile top card data missing or incomplete in fetched state. Setting to null.");}
 
-    // Update other game state variables
     deckCardCount = gameState.deck_card_count !== undefined ? gameState.deck_card_count : 0;
     currentPlayerName = gameState.current_player || 'N/A';
     currentChosenColorDisplay = gameState.current_chosen_color || ''; 
+    awaiting_color_choice_frontend = gameState.awaiting_color_choice !== undefined ? gameState.awaiting_color_choice : false;
     playersList = gameState.players_list || [];
     playDirectionDisplay = gameState.play_direction || 'N/A';
-    // messageFromServer = gameState.message || "";
+    // if(gameState.message) messageFromServer = gameState.message;
     
   } catch (error) {
     console.error('Failed to fetch and update game state:', error);
-    playerHand = [new UnoCard('grey', 'ConnErrP')];
-    discardTopCard = new UnoCard('grey', 'ConnErrD');
-    deckCardCount = 0;
-    currentPlayerName = 'Error';
-    currentChosenColorDisplay = 'Error';
-    playersList = [];
-    playDirectionDisplay = 'Error';
+    playerHand = [new UnoCard('grey', 'ConnErrP')]; discardTopCard = new UnoCard('grey', 'ConnErrD');
+    deckCardCount = 0; currentPlayerName = 'Error'; currentChosenColorDisplay = 'Error';
+    awaiting_color_choice_frontend = false; playersList = []; playDirectionDisplay = 'Error';
     // messageFromServer = `Error: ${error.message}`;
   }
 }
@@ -215,25 +203,123 @@ async function setup() {
 
 function draw() {
   background(0, 100, 0); 
-  const handSpacing = 10; 
+  
   const currentHandLength = playerHand ? playerHand.length : 0;
-  const totalHandWidth = (currentHandLength * (HAND_CARD_WIDTH + handSpacing)) - handSpacing;
+  const totalHandWidth = (currentHandLength * (HAND_CARD_WIDTH + HAND_CARD_SPACING)) - HAND_CARD_SPACING;
   const handStartX = (width - totalHandWidth) / 2;
 
-  drawPlayerHand(playerHand, handStartX, HAND_Y_POSITION, HAND_CARD_WIDTH, HAND_CARD_HEIGHT, handSpacing);
+  drawPlayerHand(playerHand, handStartX, HAND_Y_POSITION, HAND_CARD_WIDTH, HAND_CARD_HEIGHT, HAND_CARD_SPACING);
   drawDeck(DECK_X, DECK_Y, HAND_CARD_WIDTH, HAND_CARD_HEIGHT, deckCardCount); 
   drawDiscardPile(discardTopCard, DISCARD_X, DISCARD_Y, HAND_CARD_WIDTH, HAND_CARD_HEIGHT);
   drawButtonPlaceholders(gameButtons);
 
-  fill(255); textSize(20); textAlign(LEFT, TOP);
-  text(`Current Player: ${currentPlayerName}`, 20, 20);
-  if (currentChosenColorDisplay) { text(`Chosen Color: ${currentChosenColorDisplay}`, 20, 50); }
-  text(`Players: ${playersList.join(', ')}`, 20, 80);
-  text(`Direction: ${playDirectionDisplay}`, 20, 110);
-  // if (messageFromServer) { text(`Message: ${messageFromServer}`, 20, 140); }
+  // Game Status Text Display
+  const statusTextX = 20;
+  let statusTextY = 20;
+  const statusTextLeading = 25; // Spacing between lines of text
+
+  fill(255); // White text for general status
+  textSize(18); // Slightly smaller for less critical info
+  textAlign(LEFT, TOP);
+  
+  text(`Current Player: ${currentPlayerName}`, statusTextX, statusTextY);
+  statusTextY += statusTextLeading;
+  
+  text(`Active Color: ${currentChosenColorDisplay || 'None'}`, statusTextX, statusTextY);
+  statusTextY += statusTextLeading;
+  
+  text(`Players: ${playersList.join(', ')}`, statusTextX, statusTextY);
+  statusTextY += statusTextLeading;
+  
+  text(`Direction: ${playDirectionDisplay}`, statusTextX, statusTextY);
+  // statusTextY += statusTextLeading;
+  // if (messageFromServer) { text(`Message: ${messageFromServer}`, statusTextX, statusTextY); }
+
+  // Prominent "Awaiting Color Choice" message
+  if (awaiting_color_choice_frontend) {
+    push(); // Isolate text style changes
+    fill(255, 223, 0); // Bright yellow for emphasis
+    textSize(28);
+    textAlign(CENTER, CENTER);
+    // Position it above the discard pile, or more centrally if preferred
+    text("Wild Card Played! Choose a color.", DISCARD_X + HAND_CARD_WIDTH / 2, DISCARD_Y - HAND_CARD_HEIGHT / 2 - 30);
+    pop();
+  }
 }
 
 function mousePressed() {
+  // Card click detection
+  if (playerHand && playerHand.length > 0) {
+    const currentHandLength = playerHand.length;
+    const totalHandWidth = (currentHandLength * HAND_CARD_WIDTH) + ((currentHandLength > 0 ? currentHandLength - 1 : 0) * HAND_CARD_SPACING);
+    let currentHandStartX = (width - totalHandWidth) / 2;
+
+    for (let i = 0; i < currentHandLength; i++) {
+      let cardX = currentHandStartX + i * (HAND_CARD_WIDTH + HAND_CARD_SPACING);
+      let cardY = HAND_Y_POSITION;
+      if (mouseX >= cardX && mouseX <= cardX + HAND_CARD_WIDTH &&
+          mouseY >= cardY && mouseY <= cardY + HAND_CARD_HEIGHT) {
+        
+        const clickedCardObject = playerHand[i];
+        const cardToPlay = { 
+            color: clickedCardObject.color, 
+            value: clickedCardObject.value 
+        };
+        console.log("Attempting to play card:", cardToPlay);
+
+        fetch('/api/play_card', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(cardToPlay)
+        })
+        .then(response => {
+            if (!response.ok) {
+                return response.json().then(errData => {
+                     console.error('Play card request failed:', response.status, errData.message || errData);
+                     alert("Invalid Play: " + (errData.message || "Move not allowed."));
+                     throw new Error(errData.message || `Play card request failed: ${response.statusText}`);
+                }).catch((parsingError) => { 
+                     console.error('Play card request failed or error JSON parsing failed:', response.status, response.statusText, parsingError);
+                     alert("Invalid Play: " + response.statusText);
+                     throw new Error(`Play card request failed: ${response.statusText} - Could not parse error JSON or already handled.`);
+                });
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.success) {
+                console.log('Play card successful:', data.message, data); 
+                
+                if (data.player_hand) playerHand = data.player_hand.map(cardData => new UnoCard(cardData.color, cardData.value));
+                if (data.discard_pile_top_card && data.discard_pile_top_card.color && data.discard_pile_top_card.value) {
+                    discardTopCard = new UnoCard(data.discard_pile_top_card.color, data.discard_pile_top_card.value);
+                } else { discardTopCard = null; }
+                deckCardCount = data.deck_card_count !== undefined ? data.deck_card_count : deckCardCount;
+                currentPlayerName = data.current_player || currentPlayerName;
+                currentChosenColorDisplay = data.current_chosen_color || ''; 
+                awaiting_color_choice_frontend = data.awaiting_color_choice !== undefined ? data.awaiting_color_choice : awaiting_color_choice_frontend;
+                playersList = data.players_list || playersList;
+                playDirectionDisplay = data.play_direction || playDirectionDisplay;
+                // if(data.message) messageFromServer = data.message;
+
+            } else {
+                console.error('Play card reported as not successful by server:', data.message);
+                if (data.message) {
+                    alert("Play Card Error: " + data.message);
+                }
+            }
+        })
+        .catch(error => { 
+            console.error('Error sending play card request:', error);
+        });
+        return; 
+      }
+    }
+  }
+
+  // Button click detection 
   if (gameButtons && gameButtons.length > 0) {
     for (const button of gameButtons) {
       if (mouseX >= button.x && mouseX <= button.x + button.width &&
@@ -248,8 +334,10 @@ function mousePressed() {
           .then(response => {
               if (!response.ok) {
                   return response.json().then(errData => {
+                      alert("Draw Card Error: " + (errData.message || "Failed to draw card."));
                       throw new Error(`Network response was not ok. Status: ${response.status}. Message: ${errData.error || errData.message || 'No error message from server.'}`);
                   }).catch(() => {
+                      alert("Draw Card Error: " + response.statusText);
                       throw new Error(`Network response was not ok. Status: ${response.status}. Could not parse error from server.`);
                   });
               }
@@ -257,10 +345,7 @@ function mousePressed() {
           })
           .then(data => {
               console.log('Draw card action successful, new game state:', data);
-              if(data.message) {
-                console.log("Message from server: " + data.message);
-                // messageFromServer = data.message; // Update message
-              }
+              if(data.message) console.log("Message from server: " + data.message);
               if (data.player_hand) playerHand = data.player_hand.map(cardData => new UnoCard(cardData.color, cardData.value));
               if (data.discard_pile_top_card && data.discard_pile_top_card.color && data.discard_pile_top_card.value) {
                   discardTopCard = new UnoCard(data.discard_pile_top_card.color, data.discard_pile_top_card.value);
@@ -268,12 +353,12 @@ function mousePressed() {
               deckCardCount = data.deck_card_count !== undefined ? data.deck_card_count : 0;
               currentPlayerName = data.current_player || 'N/A';
               currentChosenColorDisplay = data.current_chosen_color || '';
+              awaiting_color_choice_frontend = data.awaiting_color_choice !== undefined ? data.awaiting_color_choice : awaiting_color_choice_frontend;
               playersList = data.players_list || [];
               playDirectionDisplay = data.play_direction || '';
           })
           .catch(error => {
               console.error('Error during draw card action:', error);
-              // messageFromServer = `Error: ${error.message}`;
           });
         } else if (button.label === 'End Turn') {
             console.log("End Turn button clicked! - Attempting to end turn via backend...");
@@ -284,8 +369,10 @@ function mousePressed() {
             .then(response => {
                 if (!response.ok) {
                     return response.json().then(errData => {
+                        alert("End Turn Error: " + (errData.message || "Failed to end turn."));
                         throw new Error(`Network response was not ok. Status: ${response.status}. Message: ${errData.error || errData.message || 'No error message from server.'}`);
                     }).catch(() => {
+                        alert("End Turn Error: " + response.statusText);
                         throw new Error(`Network response was not ok. Status: ${response.status}. Could not parse error from server.`);
                     });
                 }
@@ -293,24 +380,20 @@ function mousePressed() {
             })
             .then(data => {
                 console.log('End turn successful, new game state:', data);
-                if(data.message) {
-                  console.log("Message from server: " + data.message);
-                  // messageFromServer = data.message; // Update message
-                }
-                // Update game state from the response data - hand will be for the NEW current player
+                if(data.message) console.log("Message from server: " + data.message);
                 if (data.player_hand) playerHand = data.player_hand.map(cardData => new UnoCard(cardData.color, cardData.value));
                 if (data.discard_pile_top_card && data.discard_pile_top_card.color && data.discard_pile_top_card.value) {
                     discardTopCard = new UnoCard(data.discard_pile_top_card.color, data.discard_pile_top_card.value);
-                } else { discardTopCard = null; } // Should generally not be null after game start
+                } else { discardTopCard = null; } 
                 deckCardCount = data.deck_card_count !== undefined ? data.deck_card_count : 0;
-                currentPlayerName = data.current_player || 'N/A'; // This is the NEW current player
+                currentPlayerName = data.current_player || 'N/A'; 
                 currentChosenColorDisplay = data.current_chosen_color || '';
+                awaiting_color_choice_frontend = data.awaiting_color_choice !== undefined ? data.awaiting_color_choice : awaiting_color_choice_frontend;
                 playersList = data.players_list || [];
                 playDirectionDisplay = data.play_direction || '';
             })
             .catch(error => {
                 console.error('Error during end turn action:', error);
-                // messageFromServer = `Error: ${error.message}`;
             });
         } else {
           console.log(button.label + " button clicked!");
