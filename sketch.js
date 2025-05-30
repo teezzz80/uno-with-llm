@@ -5,6 +5,29 @@ class UnoCard {
   }
 }
 
+// Global game layout variables
+const HAND_CARD_WIDTH = 100;
+const HAND_CARD_HEIGHT = 150;
+const DECK_X = 200; // X position for the deck
+let DISCARD_X; // Will be calculated in setup
+
+let HAND_Y_POSITION; // Y position for the player's hand
+let DECK_Y;          // Y position for the deck
+let DISCARD_Y;       // Y position for the discard pile
+
+let playerHand = [
+  new UnoCard('red', '1'),
+  new UnoCard('green', '7'),
+  new UnoCard('blue', 'drawTwo'),
+  new UnoCard('yellow', '0'),
+  new UnoCard('red', 'skip'),
+  new UnoCard('black', 'wild')
+  // Add one more for 7 cards if desired: new UnoCard('blue', '3')
+];
+
+let discardTopCard; // To hold the card on top of the discard pile
+let gameButtons = [];   // To hold button objects
+
 function drawUnoCard(card, x, y, cardWidth, cardHeight) {
   const cornerRadius = cardWidth / 12; // Proportional corner radius
   const tiltAngle = 15;
@@ -38,7 +61,6 @@ function drawUnoCard(card, x, y, cardWidth, cardHeight) {
     const centerX = x + cardWidth / 2;
     const centerY = y + cardHeight / 2;
 
-    // Draw four colored segments (example: slightly overlapping rectangles)
     fill(255, 0, 0); // Red
     rect(centerX - segmentWidth, centerY - segmentHeight, segmentWidth, segmentHeight);
     fill(255, 255, 0); // Yellow
@@ -51,32 +73,30 @@ function drawUnoCard(card, x, y, cardWidth, cardHeight) {
     if (isWildDrawFour) {
       push();
       translate(centerX, centerY);
-      // rotate(tiltAngle); // Optional tilt for +4
-      fill(255); // White text for +4
-      stroke(0); // Black outline
+      fill(255); 
+      stroke(0); 
       strokeWeight(cardWidth / 60);
       textAlign(CENTER, CENTER);
       textStyle(BOLD);
       textSize(cardWidth / 3);
       text('+4', 0, 0);
       pop();
-    } else { // Regular Wild
+    } else { 
       push();
       translate(centerX, centerY);
-      // rotate(tiltAngle); // Optional tilt for WILD
       fill(255);
       stroke(0);
       strokeWeight(cardWidth / 70);
       textAlign(CENTER, CENTER);
       textStyle(BOLD);
-      textSize(cardWidth / 5); // Smaller "WILD" text
+      textSize(cardWidth / 5); 
       text('WILD', 0, 0);
       pop();
     }
   } else {
     // 3. Central White Ellipse
     const ellipseWidth = cardWidth * 0.75;
-    const ellipseHeight = cardHeight * 0.78; // Adjusted to look more like Uno cards
+    const ellipseHeight = cardHeight * 0.78; 
     push();
     translate(x + cardWidth / 2, y + cardHeight / 2);
     rotate(tiltAngle);
@@ -90,30 +110,29 @@ function drawUnoCard(card, x, y, cardWidth, cardHeight) {
     translate(x + cardWidth / 2, y + cardHeight / 2);
     rotate(tiltAngle);
     
-    // Determine text color and stroke based on card color
     let centralTextColor, centralStrokeColor;
-    if (card.color === 'yellow') { // Special case for yellow cards
-        centralTextColor = color(0); // Black text
-        centralStrokeColor = color(255); // White outline
+    if (card.color === 'yellow') { 
+        centralTextColor = color(0); 
+        centralStrokeColor = color(255); 
     } else {
-        centralTextColor = cardColorValue; // Card's color for text
-        centralStrokeColor = color(255); // White outline
+        centralTextColor = cardColorValue; 
+        centralStrokeColor = color(255); 
     }
 
     fill(centralTextColor);
     stroke(centralStrokeColor);
-    strokeWeight(cardWidth / 75); // Proportional stroke weight
+    strokeWeight(cardWidth / 75); 
     textAlign(CENTER, CENTER);
     textStyle(BOLD);
 
     let centralValue = card.value;
-    let centralTextSize = cardWidth / 2.5; // Default for numbers
+    let centralTextSize = cardWidth / 2.5; 
 
     if (card.value === 'skip') {
-      centralValue = 'S'; // Using 'S' for Skip
+      centralValue = 'S'; 
       centralTextSize = cardWidth / 2;
     } else if (card.value === 'reverse') {
-      centralValue = 'R'; // Using 'R' for Reverse
+      centralValue = 'R'; 
       centralTextSize = cardWidth / 2;
     } else if (card.value === 'drawTwo') {
       centralValue = '+2';
@@ -132,9 +151,9 @@ function drawUnoCard(card, x, y, cardWidth, cardHeight) {
   if (card.value === 'reverse') cornerValue = 'R';
   if (card.value === 'drawTwo') cornerValue = '+2';
 
-  const cornerTextSize = cardWidth / 7; // Adjusted for better proportion
-  const cornerXOffset = cardWidth * 0.12; // Adjusted for better centering
-  const cornerYOffset = cardHeight * 0.08; // Adjusted for better centering
+  const cornerTextSize = cardWidth / 7; 
+  const cornerXOffset = cardWidth * 0.12; 
+  const cornerYOffset = cardHeight * 0.08; 
 
   fill(255);
   noStroke();
@@ -142,10 +161,8 @@ function drawUnoCard(card, x, y, cardWidth, cardHeight) {
   textSize(cornerTextSize);
   textAlign(CENTER, CENTER);
 
-  // Top-Left
-  text(cornerValue, x + cornerXOffset, y + cornerYOffset + (cornerTextSize / 3)); // Minor y adjustment for visual centering
+  text(cornerValue, x + cornerXOffset, y + cornerYOffset + (cornerTextSize / 3)); 
 
-  // Bottom-Right
   push();
   translate(x + cardWidth - cornerXOffset, y + cardHeight - cornerYOffset - (cornerTextSize / 3));
   rotate(180);
@@ -153,37 +170,132 @@ function drawUnoCard(card, x, y, cardWidth, cardHeight) {
   pop();
 }
 
+function drawPlayerHand(handArray, startX, startY, cardWidth, cardHeight, spacing) {
+  for (let i = 0; i < handArray.length; i++) {
+    const card = handArray[i];
+    const currentX = startX + i * (cardWidth + spacing);
+    drawUnoCard(card, currentX, startY, cardWidth, cardHeight);
+  }
+}
+
+function drawDeck(x, y, cardWidth, cardHeight, stackCount) {
+  const offsetX = 4;
+  const offsetY = 4;
+  const cornerRadius = cardWidth / 15; 
+
+  fill(0); 
+  noStroke();
+  for (let i = 0; i < stackCount -1; i++) {
+    rect(x + i * offsetX, y - i * offsetY, cardWidth, cardHeight, cornerRadius);
+  }
+
+  const topX = x + (stackCount - 1) * offsetX;
+  const topY = y - (stackCount - 1) * offsetY;
+  fill(20, 20, 20); 
+  stroke(100); 
+  strokeWeight(1);
+  rect(topX, topY, cardWidth, cardHeight, cornerRadius);
+
+  push();
+  translate(topX + cardWidth / 2, topY + cardHeight / 2);
+  rotate(15); 
+  stroke(255); 
+  strokeWeight(cardWidth / 50);
+  textAlign(CENTER, CENTER);
+  textStyle(BOLD);
+  textSize(cardHeight / 3.5); 
+  
+  fill(255,255,0); 
+  text('UNO', cardWidth/30, cardHeight/30); 
+  fill(255, 0, 0); 
+  text('UNO', 0, 0);
+  pop();
+}
+
+function drawDiscardPile(topCard, x, y, cardWidth, cardHeight) {
+  if (topCard) { 
+    drawUnoCard(topCard, x, y, cardWidth, cardHeight);
+  } else {
+    // fill(0, 50, 0); 
+    // noStroke();
+    // rect(x, y, cardWidth, cardHeight, cardWidth / 15);
+  }
+}
+
+function drawButtonPlaceholders(buttonDataArray) {
+  if (!buttonDataArray) return;
+
+  for (const buttonObject of buttonDataArray) {
+    if (buttonObject.color) {
+        if (typeof buttonObject.color === 'string') {
+            fill(buttonObject.color); 
+        } else {
+            fill(buttonObject.color); 
+        }
+    } else {
+        fill(100); 
+    }
+    noStroke(); 
+    rect(buttonObject.x, buttonObject.y, buttonObject.width, buttonObject.height, 5);
+
+    if (buttonObject.textColor) {
+        if (typeof buttonObject.textColor === 'string') {
+            fill(buttonObject.textColor);
+        } else {
+            fill(buttonObject.textColor);
+        }
+    } else {
+        fill(0); 
+    }
+    textAlign(CENTER, CENTER);
+    textSize(buttonObject.height * 0.4); 
+    text(buttonObject.label, buttonObject.x + buttonObject.width / 2, buttonObject.y + buttonObject.height / 2);
+  }
+}
+
 function setup() {
   createCanvas(1200, 800);
-  angleMode(DEGREES); // Use degrees for rotation
-  textFont('Arial'); // Set default font
+  angleMode(DEGREES); 
+  textFont('Arial');
+
+  // Calculate positions that depend on width/height
+  HAND_Y_POSITION = height - HAND_CARD_HEIGHT - 40;
+  DECK_Y = height / 2 - HAND_CARD_HEIGHT / 2;
+  DISCARD_X = DECK_X + HAND_CARD_WIDTH + 50; // Place discard pile next to deck
+  DISCARD_Y = DECK_Y;
+
+  discardTopCard = new UnoCard('green', '4'); // Initialize discard pile with a card
+
+  let buttonWidth = 180;
+  let buttonHeight = 50; // Slightly smaller buttons
+  // Buttons positioned above the hand, to the right
+  let firstButtonX = width - (buttonWidth * 3 + 2 * 10) - 40 ; // Start from right edge, move left
+
+  gameButtons = [
+    { label: 'Draw Card', x: firstButtonX, y: HAND_Y_POSITION - buttonHeight - 30, width: buttonWidth, height: buttonHeight, color: color(0,150,0), textColor: color(255) },
+    { label: 'UNO!', x: firstButtonX + buttonWidth + 10, y: HAND_Y_POSITION - buttonHeight - 30, width: buttonWidth, height: buttonHeight, color: color(255,223,0), textColor: color(0) }, // Yellow UNO button
+    { label: 'End Turn', x: firstButtonX + 2*(buttonWidth + 10), y: HAND_Y_POSITION - buttonHeight - 30, width: buttonWidth, height: buttonHeight, color: color(200,0,0), textColor: color(255) }
+  ];
 }
 
 function draw() {
   background(0, 100, 0); // Green card table background
 
-  // Define card properties
-  let cardWidth = 150;
-  let cardHeight = 225;
-  let initialX = 50;
-  let cardY = 100;
-  let spacing = cardWidth + 30;
+  // Calculate starting X to center the player's hand
+  // Spacing of 10 between cards in hand
+  const handSpacing = 10; 
+  const totalHandWidth = (playerHand.length * (HAND_CARD_WIDTH + handSpacing)) - handSpacing;
+  const handStartX = (width - totalHandWidth) / 2;
 
-  // Instantiate UnoCard objects
-  let blue5Card = new UnoCard('blue', '5');
-  let yellowSkipCard = new UnoCard('yellow', 'skip');
-  let wildCard = new UnoCard('black', 'wild');
-  // let redDrawTwo = new UnoCard('red', 'drawTwo');
-  // let greenReverse = new UnoCard('green', 'reverse');
-  // let wildDraw4 = new UnoCard('black', 'wildDrawFour');
-
-
-  // Call drawUnoCard() for each card
-  drawUnoCard(blue5Card, initialX, cardY, cardWidth, cardHeight);
-  drawUnoCard(yellowSkipCard, initialX + spacing, cardY, cardWidth, cardHeight);
-  drawUnoCard(wildCard, initialX + 2 * spacing, cardY, cardWidth, cardHeight);
-  // drawUnoCard(redDrawTwo, initialX + 3 * spacing, cardY, cardWidth, cardHeight);
-  // drawUnoCard(greenReverse, initialX + 4 * spacing, cardY, cardWidth, cardHeight);
-  // drawUnoCard(wildDraw4, initialX + 5 * spacing, cardY, cardWidth, cardHeight);
-
+  // Draw Player's Hand
+  drawPlayerHand(playerHand, handStartX, HAND_Y_POSITION, HAND_CARD_WIDTH, HAND_CARD_HEIGHT, handSpacing);
+  
+  // Draw Deck
+  drawDeck(DECK_X, DECK_Y, HAND_CARD_WIDTH, HAND_CARD_HEIGHT, 3); // Stack of 3 cards for the deck
+  
+  // Draw Discard Pile
+  drawDiscardPile(discardTopCard, DISCARD_X, DISCARD_Y, HAND_CARD_WIDTH, HAND_CARD_HEIGHT);
+  
+  // Draw Buttons
+  drawButtonPlaceholders(gameButtons);
 }
