@@ -13,7 +13,7 @@ from flask import Flask, send_from_directory, jsonify, request
 
 # --- Ollama Configuration ---
 OLLAMA_API_ENDPOINT = "http://localhost:11434/api/chat" # Or your actual Ollama endpoint
-OLLAMA_MODEL = "gemma:2b" # Using a smaller model for potentially faster responses initially
+OLLAMA_MODEL = "gemma3:4b" # Using a smaller model for potentially faster responses initially
 OLLAMA_REQUEST_TIMEOUT = 60 # seconds
 
 # --- UNO Deck Definition and Utilities ---
