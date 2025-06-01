@@ -502,27 +502,34 @@ def play_card_action():
             pending_draw_amount += 4
             message += f" Next player must draw 4."
 
-        awaiting_color_choice = False
+        awaiting_color_choice = False # Resetting by default
         if card_in_hand_to_play['color'] == 'black':
-            chosen_color_from_payload = played_card_data.get('chosen_color')
-            if chosen_color_from_payload and chosen_color_from_payload in COLORS:
-                current_chosen_color = chosen_color_from_payload
-                message += f" Color chosen: {current_chosen_color}."
-                # If a wild card is played, the turn usually ends immediately after color choice.
-                # Card effects (like Draw Four) and turn ending are not handled yet.
-            else:
-                # This case means a Wild was played but no color was specified in THIS request.
-                # This is correct for a card like "Wild" that needs a subsequent color choice.
+            # If Player1 (human) plays a black card
+            if current_player_name == "Player1":
                 awaiting_color_choice = True
-                current_chosen_color = None # Explicitly set to None, color must be chosen next
-                message += " Please choose a color."
-        else: # A colored card was played
+                current_chosen_color = None # Player1 needs to choose a color
+                message = f"{current_player_name} played: {card_in_hand_to_play['color']} {card_in_hand_to_play['value']}. Please choose a color."
+                # Turn does not advance here for Player1 after playing a Wild.
+            else: # AI played a black card (handled by execute_ai_turn, which includes color choice)
+                # This part of the code might be redundant if AI's black card play + color choice
+                # is fully managed within execute_ai_turn and doesn't fall through here.
+                # However, if it does, ensure AI's chosen color is respected.
+                chosen_color_from_payload = played_card_data.get('chosen_color') # This might come from AI's decision bundle
+                if chosen_color_from_payload and chosen_color_from_payload in COLORS:
+                    current_chosen_color = chosen_color_from_payload
+                    message += f" AI chose color: {current_chosen_color}."
+                else:
+                    # Fallback for AI if color somehow not chosen, though AI logic should handle this.
+                    current_chosen_color = random.choice(COLORS)
+                    message += f" AI defaulted color to: {current_chosen_color}."
+                # For AI, turn advancement is handled after execute_ai_turn in /api/end_turn or similar.
+        else: # A colored card was played (by either player)
             current_chosen_color = card_in_hand_to_play['color']
         
         print(message)
-        # TODO: Implement card actions (Skip, Reverse, Draw Two, Wild Draw Four)
         # TODO: Check for win condition (player hand empty)
-        # TODO: Advance turn if not awaiting color choice and no other action pending
+        # Note: Turn advancement logic is primarily in /api/end_turn.
+        # If Player1 just played a wild, awaiting_color_choice is true, and end_turn will prevent turn advance.
 
         response_data = {
             "success": True,
@@ -549,8 +556,19 @@ def end_turn():
 
     if not game_started:
         return jsonify({"error": "Game not started"}), 400
-    if awaiting_color_choice:
-        return jsonify({"error": "A color must be chosen for the played Wild card before ending the turn."}), 400
+
+    # Check for Player1 pending draw
+    current_player_name = players[current_player_index]
+    if current_player_name == "Player1" and pending_draw_amount > 0:
+        return jsonify({"error": "You must draw your pending cards before ending your turn!"}), 400
+
+    if awaiting_color_choice: # This check should likely be for Player1 as well.
+        # If it's Player1's turn and they are awaiting color choice, they shouldn't end turn.
+        if current_player_name == "Player1":
+            return jsonify({"error": "A color must be chosen for the played Wild card before ending the turn."}), 400
+        # If it's AI's turn (e.g. after human plays wild, then AI plays), this might not apply or be handled within AI logic.
+        # For now, keeping the original broad check but contextualized.
+        # Consider if AI could ever be 'awaiting_color_choice' in a way that blocks this. Unlikely.
 
     num_players = len(players)
 
@@ -623,6 +641,67 @@ def end_turn():
         "game_winner": game_winner
     }
     return jsonify(response_data)
+
+@app.route('/api/choose_color', methods=['POST'])
+def choose_color():
+    global current_player_index, players, awaiting_color_choice, current_chosen_color, COLORS
+    global game_deck, player_hands, discard_pile_top_card, play_direction, ai_last_banter, pending_draw_amount, game_winner # For full game state return
+
+    current_player_name = players[current_player_index]
+
+    if not game_started:
+        return jsonify({"error": "Game not started."}), 400
+    if current_player_name != "Player1":
+        return jsonify({"error": "Not Player1's turn to choose a color."}), 400
+    if not awaiting_color_choice:
+        return jsonify({"error": "Not awaiting a color choice."}), 400
+
+    data = request.get_json()
+    chosen_color = data.get('chosen_color')
+
+    if not chosen_color or chosen_color not in COLORS:
+        return jsonify({"error": "Invalid color chosen."}), 400
+
+    current_chosen_color = chosen_color
+    awaiting_color_choice = False
+
+    message = f"Player1 chose color: {current_chosen_color}."
+    print(message)
+
+    # Similar to get_game_state, return the full state so frontend can update.
+    # This is after Player1 has chosen a color, so it's still Player1's "action phase" potentially,
+    # or the turn is about to be passed. The key is that current_player is still Player1 here.
+    hand_to_send = player_hands.get(current_player_name, [])
+    opponent_player_name = players[(current_player_index + 1) % len(players)] # Should be Player2
+    opponent_card_count = len(player_hands.get(opponent_player_name, []))
+
+
+    # After choosing a color, if the card was a Wild Draw Four, the pending_draw_amount
+    # would have already been set during the play_card action.
+    # The turn should then proceed to the AI.
+    # It might be good to call end_turn logic here if the user is expected to click "End Turn"
+    # OR if choosing color automatically ends the "action" part of their turn.
+    # For now, let's assume choosing color is the final part of their wild card play,
+    # and the user will subsequently click "End Turn". The end_turn checks will then apply.
+
+    game_state_response = {
+        "success": True,
+        "message": message,
+        "player_hand": hand_to_send,
+        "discard_pile_top_card": discard_pile_top_card if discard_pile_top_card else {"color": "grey", "value": "Empty"},
+        "deck_card_count": len(game_deck),
+        "current_player": current_player_name, # Still Player1
+        "current_chosen_color": current_chosen_color,
+        "awaiting_color_choice": awaiting_color_choice, # Should be false now
+        "players_list": players,
+        "play_direction": "forward" if play_direction == 1 else "backward",
+        "pending_draw_amount": pending_draw_amount,
+        "ai_last_banter": ai_last_banter, # Carry over any existing banter
+        "game_winner": game_winner,
+        "opponent_card_count": opponent_card_count
+    }
+    return jsonify(game_state_response)
+
 
 if __name__ == '__main__':
     app.run(debug=True)

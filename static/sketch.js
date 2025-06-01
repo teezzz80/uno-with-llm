@@ -33,6 +33,7 @@ let DECK_Y;          // Y position for the deck
 let DISCARD_Y;       // Y position for the discard pile
 
 let gameButtons = [];   // To hold button objects
+let colorChoiceButtons = []; // For Red, Green, Blue, Yellow pickers
 
 async function fetchAndUpdateGameState() {
   try {
@@ -211,6 +212,23 @@ async function setup() {
     { label: 'UNO!', x: firstButtonX + buttonWidth + 10, y: HAND_Y_POSITION - buttonHeight - 30, width: buttonWidth, height: buttonHeight, color: color(255,223,0), textColor: color(0) }, 
     { label: 'End Turn', x: firstButtonX + 2*(buttonWidth + 10), y: HAND_Y_POSITION - buttonHeight - 30, width: buttonWidth, height: buttonHeight, color: color(200,0,0), textColor: color(255) }
   ];
+
+  // Define Color Choice Buttons
+  let cButtonWidth = 80;
+  let cButtonHeight = 50;
+  let cButtonSpacing = 10;
+  let totalColorButtonsWidth = 4 * cButtonWidth + 3 * cButtonSpacing;
+  let firstColorButtonX = (width - totalColorButtonsWidth) / 2;
+  //let colorButtonY = DISCARD_Y + HAND_CARD_HEIGHT + 30; // Below discard pile
+  let colorButtonY = height / 2 + 50; // Centered vertically, slightly lower
+
+  colorChoiceButtons = [
+    { label: 'Red',    colorName: 'red',    x: firstColorButtonX,                           y: colorButtonY, width: cButtonWidth, height: cButtonHeight, color: color(255,0,0),   textColor: color(255) },
+    { label: 'Green',  colorName: 'green',  x: firstColorButtonX + cButtonWidth + cButtonSpacing, y: colorButtonY, width: cButtonWidth, height: cButtonHeight, color: color(0,180,0),   textColor: color(255) },
+    { label: 'Blue',   colorName: 'blue',   x: firstColorButtonX + 2*(cButtonWidth + cButtonSpacing), y: colorButtonY, width: cButtonWidth, height: cButtonHeight, color: color(0,0,255),   textColor: color(255) },
+    { label: 'Yellow', colorName: 'yellow', x: firstColorButtonX + 3*(cButtonWidth + cButtonSpacing), y: colorButtonY, width: cButtonWidth, height: cButtonHeight, color: color(255,223,0), textColor: color(0)   }
+  ];
+
   await fetchAndUpdateGameState(); 
 }
 
@@ -224,7 +242,25 @@ function draw() {
   drawPlayerHand(playerHand, handStartX, HAND_Y_POSITION, HAND_CARD_WIDTH, HAND_CARD_HEIGHT, HAND_CARD_SPACING);
   drawDeck(DECK_X, DECK_Y, HAND_CARD_WIDTH, HAND_CARD_HEIGHT, deckCardCount); 
   drawDiscardPile(discardTopCard, DISCARD_X, DISCARD_Y, HAND_CARD_WIDTH, HAND_CARD_HEIGHT);
+
+  // Update End Turn button color based on game state
+  let endTurnButton = gameButtons.find(b => b.label === 'End Turn');
+  if (endTurnButton) {
+    if ((pendingDrawAmountFE > 0 && currentPlayerName === 'Player1') || (awaiting_color_choice_frontend && currentPlayerName === 'Player1')) {
+      endTurnButton.color = color(128, 128, 128); // Inactive color
+    } else {
+      endTurnButton.color = color(200, 0, 0); // Active color
+    }
+  }
+
+
   drawButtonPlaceholders(gameButtons);
+
+  // Draw color choice buttons if awaiting choice from Player1
+  if (awaiting_color_choice_frontend && currentPlayerName === 'Player1') {
+    drawButtonPlaceholders(colorChoiceButtons);
+    // Visual alteration of "End Turn" button is already handled by the combined logic
+  }
 
   // Game Status Text Display
   const statusTextX = 20;
@@ -307,6 +343,46 @@ function draw() {
 }
 
 function mousePressed() {
+  // Handle Color Choice Button Clicks first if active
+  if (awaiting_color_choice_frontend && currentPlayerName === 'Player1') {
+    for (const button of colorChoiceButtons) {
+      if (mouseX >= button.x && mouseX <= button.x + button.width &&
+          mouseY >= button.y && mouseY <= button.y + button.height) {
+
+        console.log("Color chosen:", button.colorName);
+        fetch('/api/choose_color', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chosen_color: button.colorName })
+        })
+        .then(response => {
+          if (!response.ok) {
+            return response.json().then(errData => {
+              alert("Error choosing color: " + (errData.message || "Unknown server error."));
+              throw new Error(errData.message || `Server error: ${response.statusText}`);
+            });
+          }
+          return response.json();
+        })
+        .then(data => {
+          if (data.success) {
+            console.log("Color choice successful:", data.message);
+            // Update game state from this response directly, or call fetchAndUpdateGameState
+            // As per plan, calling fetchAndUpdateGameState for simplicity and consistency
+            fetchAndUpdateGameState();
+          } else {
+            alert("Error choosing color: " + (data.message || "Failed to choose color."));
+          }
+        })
+        .catch(error => {
+          console.error('Error sending choose_color request:', error);
+          alert("Client-side error choosing color. See console.");
+        });
+        return; // Prevent other click detections
+      }
+    }
+  }
+
   // Card click detection
   if (playerHand && playerHand.length > 0) {
     const currentHandLength = playerHand.length;
@@ -420,6 +496,14 @@ function mousePressed() {
               console.error('Error during draw card action:', error);
           });
         } else if (button.label === 'End Turn') {
+            if (awaiting_color_choice_frontend && currentPlayerName === 'Player1') {
+                alert("You must choose a color for your Wild card first!");
+                return;
+            }
+            if (pendingDrawAmountFE > 0 && currentPlayerName === 'Player1') {
+                alert("You must draw your pending cards before ending your turn!");
+                return;
+            }
             console.log("End Turn button clicked! - Attempting to end turn via backend...");
             showAiThinkingMessage = true;
             redraw(); // Show "AI is thinking..." message
