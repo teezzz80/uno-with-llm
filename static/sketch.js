@@ -8,6 +8,11 @@ let playersList = [];
 let playDirectionDisplay = '';
 let awaiting_color_choice_frontend = false; // To manage UI state for color picking
 // let messageFromServer = ""; // Optional: For displaying messages from server
+let aiLastBanter = '';
+let pendingDrawAmountFE = 0;
+let showAiThinkingMessage = false;
+let opponentCardCountFE = 0;
+let gameWinnerFE = null;
 
 class UnoCard {
   constructor(color, value) {
@@ -52,6 +57,10 @@ async function fetchAndUpdateGameState() {
     playersList = gameState.players_list || [];
     playDirectionDisplay = gameState.play_direction || 'N/A';
     // if(gameState.message) messageFromServer = gameState.message;
+    aiLastBanter = gameState.ai_last_banter || '';
+    pendingDrawAmountFE = gameState.pending_draw_amount !== undefined ? gameState.pending_draw_amount : 0;
+    opponentCardCountFE = gameState.opponent_card_count !== undefined ? gameState.opponent_card_count : 0;
+    gameWinnerFE = gameState.game_winner || null;
     
   } catch (error) {
     console.error('Failed to fetch and update game state:', error);
@@ -59,6 +68,10 @@ async function fetchAndUpdateGameState() {
     deckCardCount = 0; currentPlayerName = 'Error'; currentChosenColorDisplay = 'Error';
     awaiting_color_choice_frontend = false; playersList = []; playDirectionDisplay = 'Error';
     // messageFromServer = `Error: ${error.message}`;
+    aiLastBanter = 'Error fetching banter.';
+    pendingDrawAmountFE = 0;
+    opponentCardCountFE = 0;
+    gameWinnerFE = null;
   }
 }
 
@@ -232,8 +245,29 @@ function draw() {
   statusTextY += statusTextLeading;
   
   text(`Direction: ${playDirectionDisplay}`, statusTextX, statusTextY);
+  statusTextY += statusTextLeading;
+
+  text(`Player2 (AI) Cards: ${opponentCardCountFE}`, statusTextX, statusTextY);
+  statusTextY += statusTextLeading;
+
+  if (pendingDrawAmountFE > 0 && currentPlayerName === 'Player1') {
+    fill(255, 100, 100); // Light red for warning
+    textSize(20);
+    // textAlign(LEFT, TOP); // Already set
+    text(`Must Draw: ${pendingDrawAmountFE} cards!`, statusTextX, statusTextY);
+    statusTextY += statusTextLeading; // Increment if adding more text below
+  }
+
   // statusTextY += statusTextLeading;
   // if (messageFromServer) { text(`Message: ${messageFromServer}`, statusTextX, statusTextY); }
+
+  if (aiLastBanter) {
+    fill(255, 255, 150); // Light yellow for banter
+    textSize(16);
+    textAlign(CENTER, TOP);
+    text(`AI Says: "${aiLastBanter}"`, width / 2, statusTextY + statusTextLeading * 0.5); // Adjusted Y
+  }
+  textAlign(LEFT, TOP); // Reset alignment for other texts if changed
 
   // Prominent "Awaiting Color Choice" message
   if (awaiting_color_choice_frontend) {
@@ -244,6 +278,31 @@ function draw() {
     // Position it above the discard pile, or more centrally if preferred
     text("Wild Card Played! Choose a color.", DISCARD_X + HAND_CARD_WIDTH / 2, DISCARD_Y - HAND_CARD_HEIGHT / 2 - 30);
     pop();
+  }
+
+  if (showAiThinkingMessage) {
+    push();
+    fill(200, 200, 255, 200); // Semi-transparent overlay
+    rect(0, 0, width, height);
+    fill(0);
+    textSize(32);
+    textAlign(CENTER, CENTER);
+    text("Player2 (AI) is thinking...", width / 2, height / 2);
+    pop();
+  }
+
+  if (gameWinnerFE) {
+    push();
+    fill(0, 0, 0, 220); // Darker overlay
+    rect(0, 0, width, height);
+    fill(255, 220, 0); // Gold text
+    textSize(50);
+    textAlign(CENTER, CENTER);
+    text(`${gameWinnerFE} has won the game!`, width / 2, height / 2 - 30);
+    textSize(25);
+    text("Refresh to play again.", width / 2, height / 2 + 30);
+    pop();
+    noLoop(); // Optional: stop drawing if game is over
   }
 }
 
@@ -362,6 +421,9 @@ function mousePressed() {
           });
         } else if (button.label === 'End Turn') {
             console.log("End Turn button clicked! - Attempting to end turn via backend...");
+            showAiThinkingMessage = true;
+            redraw(); // Show "AI is thinking..." message
+
             fetch('/api/end_turn', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' }
@@ -379,21 +441,36 @@ function mousePressed() {
                 return response.json();
             })
             .then(data => {
-                console.log('End turn successful, new game state:', data);
+                console.log('End turn response received, game state:', data);
+                showAiThinkingMessage = false; // Hide "AI is thinking..."
+
                 if(data.message) console.log("Message from server: " + data.message);
                 if (data.player_hand) playerHand = data.player_hand.map(cardData => new UnoCard(cardData.color, cardData.value));
+
                 if (data.discard_pile_top_card && data.discard_pile_top_card.color && data.discard_pile_top_card.value) {
                     discardTopCard = new UnoCard(data.discard_pile_top_card.color, data.discard_pile_top_card.value);
                 } else { discardTopCard = null; } 
+
                 deckCardCount = data.deck_card_count !== undefined ? data.deck_card_count : 0;
                 currentPlayerName = data.current_player || 'N/A'; 
                 currentChosenColorDisplay = data.current_chosen_color || '';
                 awaiting_color_choice_frontend = data.awaiting_color_choice !== undefined ? data.awaiting_color_choice : awaiting_color_choice_frontend;
                 playersList = data.players_list || [];
                 playDirectionDisplay = data.play_direction || '';
+                aiLastBanter = data.ai_last_banter || '';
+                pendingDrawAmountFE = data.pending_draw_amount !== undefined ? data.pending_draw_amount : 0;
+                opponentCardCountFE = data.opponent_card_count !== undefined ? data.opponent_card_count : 0;
+                gameWinnerFE = data.game_winner || null;
+
+                if (gameWinnerFE) {
+                    redraw();
+                    noLoop();
+                }
             })
             .catch(error => {
                 console.error('Error during end turn action:', error);
+                showAiThinkingMessage = false;
+                fetchAndUpdateGameState();
             });
         } else {
           console.log(button.label + " button clicked!");
