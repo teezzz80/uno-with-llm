@@ -114,13 +114,17 @@ def execute_ai_turn():
             if game_deck:
                 card = game_deck.pop(0)
                 player_hands[ai_player_name].append(card)
-                drawn_cards_for_penalty_details.append(f"{card['color']} {card['value']}")
+                drawn_cards_for_penalty_details.append(f"{card['color']} {card['value']}") # Keep for logging
             else:
                 print(f"AI ({ai_player_name}) could not draw card {i+1}/{num_to_draw} - deck empty after reshuffle attempt.")
                 break
-        original_banter_for_draw_action = f"AI drew {len(drawn_cards_for_penalty_details)} card(s) due to a penalty: {', '.join(drawn_cards_for_penalty_details)}."
+        # Log the drawn cards for server admin, but don't put in banter
+        if drawn_cards_for_penalty_details:
+            print(f"AI ({ai_player_name}) drew penalty cards: {', '.join(drawn_cards_for_penalty_details)}")
+
+        original_banter_for_draw_action = f"AI draws {len(drawn_cards_for_penalty_details)} card(s) due to a penalty."
         ai_last_banter = original_banter_for_draw_action # Set this as the current banter
-        print(original_banter_for_draw_action)
+        # print(original_banter_for_draw_action) # This would now be redundant with the log above and banter itself
         pending_draw_amount = 0 # Penalty served by AI
         # Rule: If AI drew from a Wild Draw Four, its turn might end. For now, we let it proceed.
 
@@ -340,17 +344,53 @@ Your goal is to empty your hand. Make sure your response is valid JSON.
             if game_deck:
                 drawn_card = game_deck.pop(0)
                 player_hands[ai_player_name].append(drawn_card)
-                print(f"AI ({ai_player_name}) drew: {drawn_card['color']} {drawn_card['value']}")
-                # Ensure banter isn't overwritten if it was set due to error/penalty draw
-                if "drew" not in ai_last_banter.lower() and "jumbled" not in ai_last_banter.lower() and "glitch" not in ai_last_banter.lower() and "trouble thinking" not in ai_last_banter.lower() and "misplaced" not in ai_last_banter.lower():
-                    ai_last_banter = f"{original_banter_for_draw_action} AI draws a card ({drawn_card['color']} {drawn_card['value']}).".strip() if original_banter_for_draw_action else f"AI draws a card ({drawn_card['color']} {drawn_card['value']})."
-                elif not original_banter_for_draw_action and ("jumbled" in ai_last_banter.lower() or "glitch" in ai_last_banter.lower() or "trouble thinking" in ai_last_banter.lower() or "misplaced" in ai_last_banter.lower()):
-                    # If error banter was set, append draw info
-                    ai_last_banter += f" So, AI draws {drawn_card['color']} {drawn_card['value']}."
+                print(f"AI ({ai_player_name}) drew: {drawn_card['color']} {drawn_card['value']}") # Server log reveals card
+
+                # Generic banter for drawing a card
+                new_draw_banter = "AI draws a card."
+                if original_banter_for_draw_action: # If penalty draw happened
+                    # Check if the LLM's chosen banter already implies drawing or error
+                    if not ("draw" in ai_last_banter.lower() or \
+                            "jumbled" in ai_last_banter.lower() or \
+                            "glitch" in ai_last_banter.lower() or \
+                            "trouble thinking" in ai_last_banter.lower() or \
+                            "misplaced" in ai_last_banter.lower() or \
+                            "imagined" in ai_last_banter.lower() or \
+                            "tried to play" in ai_last_banter.lower()):
+                         # Append new_draw_banter if LLM banter was about something else (e.g. a play that became a draw)
+                         ai_last_banter = f"{ai_last_banter} {new_draw_banter}".strip()
+                    # If ai_last_banter already contains original_banter_for_draw_action, don't append new_draw_banter
+                    # This case is tricky: original_banter_for_draw_action + LLM_banter + new_draw_banter
+                    # The LLM banter might be "I guess I have to draw" which makes "AI draws a card. I guess I have to draw. AI draws a card"
+                    # Simplification: if original_banter_for_draw_action is present, the LLM banter is primary for this phase.
+                    # The generic "AI draws a card" is added if the LLM didn't provide a draw-specific one.
+                    # Let's refine this:
+                    # The LLM provides a banter for its *intended* action (e.g. "Take that!"). If that action fails and becomes a draw,
+                    # the "imagined a card... draws instead" is already set.
+                    # If LLM *chooses* to draw, its banter ("Guess I'll draw") should be primary.
+
+                elif any(err_keyword in ai_last_banter.lower() for err_keyword in ["jumbled", "glitch", "trouble thinking", "misplaced", "imagined", "tried to play"]):
+                    # If specific error/failed play banter was set, append the generic draw confirmation.
+                    if "draws instead" not in ai_last_banter.lower() and "draw a card" not in ai_last_banter.lower() : # Avoid "draws instead. So, AI draws a card."
+                         ai_last_banter += f" So, {new_draw_banter}"
+                else: # No penalty, no error, likely LLM chose to draw or LLM response failed entirely
+                    # If LLM provided banter, use it. If not, use generic.
+                    # The LLM's banter for a DRAW_CARD action is already set in ai_last_banter by this point.
+                    # If ai_last_banter is empty or generic placeholder, this means LLM failed to give banter.
+                    if not ai_last_banter or ai_last_banter == "AI is focused...":
+                        ai_last_banter = new_draw_banter
+                    # If LLM's banter like "Guess I'll draw" is there, we don't want to overwrite or append "AI draws a card."
+                    # So, if LLM provided a banter, and it's not an error one, we assume it's appropriate for drawing.
             else:
                 print(f"AI ({ai_player_name}) has no cards to draw, deck is empty.")
-                if "drew" not in ai_last_banter.lower():
-                    ai_last_banter = f"{original_banter_for_draw_action} AI has no cards to draw, deck is empty.".strip() if original_banter_for_draw_action else "AI has no cards to draw, deck is empty."
+                # Similar logic for banter if deck is empty
+                empty_deck_banter = "AI has no cards to draw, deck is empty."
+                if original_banter_for_draw_action:
+                    ai_last_banter = f"{original_banter_for_draw_action} {empty_deck_banter}".strip()
+                elif any(err_keyword in ai_last_banter.lower() for err_keyword in ["jumbled", "glitch", "trouble thinking", "misplaced", "imagined", "tried to play"]):
+                    ai_last_banter += f" And {empty_deck_banter}" # Append to error message
+                else:
+                    ai_last_banter = empty_deck_banter
 
     print(f"AI ({ai_player_name}) turn ended. Final Banter: '{ai_last_banter}'")
 
