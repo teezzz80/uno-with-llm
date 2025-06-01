@@ -13,6 +13,7 @@ let pendingDrawAmountFE = 0;
 let showAiThinkingMessage = false;
 let opponentCardCountFE = 0;
 let gameWinnerFE = null;
+let player1JustPlayedWDF = false; // Flag for WDF display logic
 
 class UnoCard {
   constructor(color, value) {
@@ -286,12 +287,11 @@ function draw() {
   text(`Player2 (AI) Cards: ${opponentCardCountFE}`, statusTextX, statusTextY);
   statusTextY += statusTextLeading;
 
-  if (pendingDrawAmountFE > 0 && currentPlayerName === 'Player1') {
+  if (pendingDrawAmountFE > 0 && currentPlayerName === 'Player1' && !player1JustPlayedWDF) {
     fill(255, 100, 100); // Light red for warning
     textSize(20);
-    // textAlign(LEFT, TOP); // Already set
     text(`Must Draw: ${pendingDrawAmountFE} cards!`, statusTextX, statusTextY);
-    statusTextY += statusTextLeading; // Increment if adding more text below
+    statusTextY += statusTextLeading;
   }
 
   // statusTextY += statusTextLeading;
@@ -367,6 +367,7 @@ function mousePressed() {
         .then(data => {
           if (data.success) {
             console.log("Color choice successful:", data.message);
+            player1JustPlayedWDF = false; // Reset flag after color is chosen
             // Update game state from this response directly, or call fetchAndUpdateGameState
             // As per plan, calling fetchAndUpdateGameState for simplicity and consistency
             fetchAndUpdateGameState();
@@ -435,11 +436,22 @@ function mousePressed() {
                 currentPlayerName = data.current_player || currentPlayerName;
                 currentChosenColorDisplay = data.current_chosen_color || ''; 
                 awaiting_color_choice_frontend = data.awaiting_color_choice !== undefined ? data.awaiting_color_choice : awaiting_color_choice_frontend;
+
+                // Set/Reset player1JustPlayedWDF based on the played card and server response
+                if (clickedCardObject.value === 'wildDrawFour' && awaiting_color_choice_frontend) {
+                    player1JustPlayedWDF = true;
+                    console.log("Player1 just played WDF, setting player1JustPlayedWDF = true");
+                } else {
+                    player1JustPlayedWDF = false;
+                    // console.log("Player1 played non-WDF or WDF failed color choice, setting player1JustPlayedWDF = false");
+                }
+
                 playersList = data.players_list || playersList;
                 playDirectionDisplay = data.play_direction || playDirectionDisplay;
                 // if(data.message) messageFromServer = data.message;
 
             } else {
+                player1JustPlayedWDF = false; // Ensure flag is reset on failed play
                 console.error('Play card reported as not successful by server:', data.message);
                 if (data.message) {
                     alert("Play Card Error: " + data.message);
@@ -447,6 +459,7 @@ function mousePressed() {
             }
         })
         .catch(error => { 
+            player1JustPlayedWDF = false; // Ensure flag is reset on network error or other client-side catch
             console.error('Error sending play card request:', error);
         });
         return; 

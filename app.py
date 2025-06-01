@@ -68,6 +68,7 @@ awaiting_color_choice = False # True if a Wild card was played and server is wai
 pending_draw_amount = 0  # Added global variable
 ai_last_banter = ""  # Added global variable
 game_winner = None  # Added global variable
+is_next_player_skipped = False # True if a skip card was played
 
 players = ["Player1", "Player2"] 
 current_player_index = 0
@@ -402,10 +403,11 @@ def serve_index():
 def get_game_state():
     global game_started, game_deck, player_hands, discard_pile, discard_pile_top_card
     global current_player_index, current_chosen_color, play_direction, players, awaiting_color_choice
-    global pending_draw_amount, ai_last_banter, game_winner # Added to globals
+    global pending_draw_amount, ai_last_banter, game_winner, is_next_player_skipped # Added to globals
 
     if not game_started:
         game_winner = None # Initialize game_winner
+        is_next_player_skipped = False # Initialize at game start
         game_deck = create_deck()
         shuffle_deck(game_deck)
         
@@ -447,6 +449,7 @@ def get_game_state():
         current_player_index = 0
         play_direction = 1
         awaiting_color_choice = False # Reset at game start
+        is_next_player_skipped = False # Reset at game start
         game_started = True
         print("Game started. Deck shuffled. Cards dealt. First discard placed.")
 
@@ -469,7 +472,8 @@ def get_game_state():
         "pending_draw_amount": pending_draw_amount,  # Added to response
         "ai_last_banter": ai_last_banter,  # Added to response
         "game_winner": game_winner,  # Added to response
-        "opponent_card_count": opponent_card_count # Added to response
+        "opponent_card_count": opponent_card_count, # Added to response
+        "is_next_player_skipped": is_next_player_skipped # Added for completeness
     }
     return jsonify(game_state_response)
 
@@ -552,7 +556,7 @@ def draw_card():
 @app.route('/api/play_card', methods=['POST'])
 def play_card_action():
     global game_started, player_hands, current_player_index, players, discard_pile_top_card, discard_pile
-    global current_chosen_color, awaiting_color_choice, game_deck, play_direction, pending_draw_amount # Added pending_draw_amount
+    global current_chosen_color, awaiting_color_choice, game_deck, play_direction, pending_draw_amount, is_next_player_skipped # Added globals
 
     if not game_started:
         return jsonify({"success": False, "message": "Game not started."}), 400
@@ -590,12 +594,29 @@ def play_card_action():
         
         # Card effects that modify pending_draw_amount
         played_value = card_in_hand_to_play['value']
+
+        # Reset is_next_player_skipped by default for most cards
+        # Only set to True if a skip or reverse (in 2P) is played by the current player
+        if current_player_name == "Player1": # Only Player1's special cards affect AI skip status directly here
+            is_next_player_skipped = False
+
         if played_value == "drawTwo":
             pending_draw_amount += 2
             message += f" Next player must draw 2."
         elif played_value == "wildDrawFour":
             pending_draw_amount += 4
             message += f" Next player must draw 4."
+        elif played_value == 'skip':
+            if current_player_name == "Player1": # Player1 playing skip
+                 is_next_player_skipped = True
+            # If AI plays skip, its logic in execute_ai_turn would handle AI skipping Player1 (not covered by this specific subtask but for future)
+            message += " Next player is skipped."
+        elif played_value == 'reverse':
+            play_direction *= -1
+            message += " Play direction reversed."
+            if len(players) == 2 and current_player_name == "Player1": # In 2-player game, reverse acts as skip for Player1
+                is_next_player_skipped = True
+                message += " Next player is skipped (due to Reverse in 2P game)."
 
         awaiting_color_choice = False # Resetting by default
         if card_in_hand_to_play['color'] == 'black':
@@ -606,18 +627,13 @@ def play_card_action():
                 message = f"{current_player_name} played: {card_in_hand_to_play['color']} {card_in_hand_to_play['value']}. Please choose a color."
                 # Turn does not advance here for Player1 after playing a Wild.
             else: # AI played a black card (handled by execute_ai_turn, which includes color choice)
-                # This part of the code might be redundant if AI's black card play + color choice
-                # is fully managed within execute_ai_turn and doesn't fall through here.
-                # However, if it does, ensure AI's chosen color is respected.
-                chosen_color_from_payload = played_card_data.get('chosen_color') # This might come from AI's decision bundle
+                chosen_color_from_payload = played_card_data.get('chosen_color')
                 if chosen_color_from_payload and chosen_color_from_payload in COLORS:
                     current_chosen_color = chosen_color_from_payload
-                    message += f" AI chose color: {current_chosen_color}."
+                    # message already includes AI played card, AI banter will handle color choice announcement
                 else:
-                    # Fallback for AI if color somehow not chosen, though AI logic should handle this.
-                    current_chosen_color = random.choice(COLORS)
-                    message += f" AI defaulted color to: {current_chosen_color}."
-                # For AI, turn advancement is handled after execute_ai_turn in /api/end_turn or similar.
+                    current_chosen_color = random.choice(COLORS) # Fallback if AI somehow didn't choose
+                    # message already includes AI played card
         else: # A colored card was played (by either player)
             current_chosen_color = card_in_hand_to_play['color']
         
@@ -645,9 +661,9 @@ def play_card_action():
 
 @app.route('/api/end_turn', methods=['POST'])
 def end_turn():
-    global current_player_index, players, game_started, play_direction
+    global current_player_index, players, game_started, play_direction, is_next_player_skipped # Added is_next_player_skipped
     global game_deck, player_hands, discard_pile_top_card, current_chosen_color, awaiting_color_choice
-    global ai_last_banter, pending_draw_amount, game_winner # Ensure these are global
+    global ai_last_banter, pending_draw_amount, game_winner
 
     if not game_started:
         return jsonify({"error": "Game not started"}), 400
@@ -666,39 +682,45 @@ def end_turn():
         # Consider if AI could ever be 'awaiting_color_choice' in a way that blocks this. Unlikely.
 
     num_players = len(players)
+    player_who_just_finished_turn = players[current_player_index]
 
-    # Advance to the next player (could be Player2/AI)
-    current_player_index = (current_player_index + play_direction + num_players) % num_players
-    player_after_human_ends_turn = players[current_player_index]
-    print(f"Turn ended by human. Tentative next player: {player_after_human_ends_turn}")
+    # Determine next player candidate based on current direction
+    next_player_candidate_index = (current_player_index + play_direction + num_players) % num_players
 
-    if player_after_human_ends_turn == "Player2":
-        print(f"Starting AI ({player_after_human_ends_turn}) turn...")
-        # --- AI's Turn Execution ---
-        # Player2 (AI) needs to handle any pending_draw_amount *before* making a move
-        if pending_draw_amount > 0 and players[current_player_index] == "Player2":
-            actual_drawn_count = 0
-            # Simulate AI drawing cards based on pending_draw_amount
-            # This part will be expanded in execute_ai_turn, for now, just log and clear
-            print(f"AI ({players[current_player_index]}) must draw {pending_draw_amount} cards.")
-            # (Actual drawing logic will be in execute_ai_turn)
-            # For now, just acknowledge and clear for simulation purposes here
-            # player_hands["Player2"].extend(...) # This will be in execute_ai_turn
-            # game_deck.pop(...)
-            ai_last_banter = f"AI draws {pending_draw_amount} cards!" # Placeholder
-            pending_draw_amount = 0 # AI took the penalty
+    ai_was_skipped_this_turn = False
+    if player_who_just_finished_turn == "Player1" and players[next_player_candidate_index] == "Player2" and is_next_player_skipped:
+        print(f"Player1 played Skip/Reverse. AI ({players[next_player_candidate_index]}) turn is skipped.")
+        ai_last_banter = "My turn was skipped! Guess I'll just chill."
+        is_next_player_skipped = False # Consume the skip
 
-        execute_ai_turn() # AI makes its decision (play or draw)
+        # Advance current_player_index past the AI, back to Player1
+        current_player_index = (next_player_candidate_index + play_direction + num_players) % num_players
+        ai_was_skipped_this_turn = True
+        # pending_draw_amount (if any, e.g. from P1 playing +2 then Skip) will now apply to P1.
 
-        # After AI's turn, advance turn to the next player (Player1)
+    elif players[next_player_candidate_index] == "Player2": # AI's turn, not skipped by Player1
+        current_player_index = next_player_candidate_index # Officially AI's turn now
+        # ai_last_banter = "" # Reset AI banter before its turn, execute_ai_turn will set it.
+        print(f"Starting AI ({players[current_player_index]}) turn...")
+
+        # Note: The placeholder logic for AI drawing due to pending_draw_amount was removed here.
+        # execute_ai_turn() is responsible for handling pending_draw_amount at the START of its turn.
+
+        execute_ai_turn() # AI makes its decision (handles its own pending draws, plays, sets banter)
+
+        # Advance turn to the next player (should be Player1)
         current_player_index = (current_player_index + play_direction + num_players) % num_players
-        print(f"AI ({player_after_human_ends_turn}) turn finished. Next player is now: {players[current_player_index]}")
+        print(f"AI ({players[next_player_candidate_index]}) turn finished. Next player is now: {players[current_player_index]}")
 
-    # At this point, current_player_index should be pointing to the player
-    # whose turn it is to ACTUALLY play next (i.e., Player1).
+    else: # Should not happen in a 2-player game where P1 just ended their turn.
+          # This would imply next player is P1 again without AI turn, or other logic error.
+        current_player_index = next_player_candidate_index
+        print(f"Warning: Unexpected turn sequence. Next player is {players[current_player_index]}")
+
+
     final_next_player_name = players[current_player_index]
     
-    # If Player1 is now to play, and there's a pending_draw_amount (from AI's wildDrawFour/drawTwo)
+    # If Player1 is now to play, and there's a pending_draw_amount (e.g. AI played +2/+4 on P1, or P1 skipped AI when P1 had played +X)
     # Player1 will handle this at the start of their turn (e.g. when they click draw or play)
     # or the UI can prompt them. The draw_card endpoint already handles this.
 
@@ -731,9 +753,10 @@ def end_turn():
         "players_list": players,
         "play_direction": "forward" if play_direction == 1 else "backward",
         "ai_last_banter": ai_last_banter,
-        "pending_draw_amount": pending_draw_amount, # Amount Player1 might have to draw
+        "pending_draw_amount": pending_draw_amount,
         "opponent_card_count": opponent_card_count,
-        "game_winner": game_winner
+        "game_winner": game_winner,
+        "is_next_player_skipped": is_next_player_skipped # For completeness
     }
     return jsonify(response_data)
 
