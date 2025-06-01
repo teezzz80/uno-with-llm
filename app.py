@@ -127,7 +127,8 @@ def execute_ai_turn():
 
     # 2. Gather Game State for LLM
     ai_hand = player_hands.get(ai_player_name, [])
-    ai_hand_for_prompt = [{"guid": card["guid"], "color": card["color"], "value": card["value"]} for card in ai_hand]
+    # Present hand to LLM without GUIDs, as it should decide based on color/value
+    ai_hand_for_prompt = [{"color": card["color"], "value": card["value"]} for card in ai_hand]
 
     other_player_name = "Player1"
     other_player_card_count = len(player_hands.get(other_player_name, []))
@@ -162,20 +163,50 @@ Choose an action:
 1. PLAY_CARD: Play a card. It must match the discard's color or value, OR the current_game_color if a Wild was played previously. Wilds can be played on any card (except on a Draw Two, typically).
 2. DRAW_CARD: If you have no valid card to play.
 
-Respond ONLY with a JSON object in the specified format:
+Respond ONLY with a JSON object in the specified format. If playing a card, specify it using its color and value:
 {{
   "action_type": "PLAY_CARD" | "DRAW_CARD",
-  "card_guid_to_play": "guid_of_card_from_your_hand_if_playing_else_null",
+  "card_to_play": {{ "color": "red", "value": "7" }},
   "declared_color": "red" | "yellow" | "green" | "blue" | null (MUST be provided if playing a 'wild' or 'wildDrawFour'),
   "call_uno": true | false (set to true if playing this card leaves you with 1 card),
   "banter": "A short, witty remark about your move or the game."
 }}
 
+Example for PLAY_CARD:
+{{
+  "action_type": "PLAY_CARD",
+  "card_to_play": {{ "color": "blue", "value": "skip" }},
+  "declared_color": null,
+  "call_uno": false,
+  "banter": "Skipping you!"
+}}
+
+Example for PLAY_CARD (Wild):
+{{
+  "action_type": "PLAY_CARD",
+  "card_to_play": {{ "color": "black", "value": "wild" }},
+  "declared_color": "green",
+  "call_uno": true,
+  "banter": "Going green and UNO!"
+}}
+
+Example for DRAW_CARD:
+{{
+  "action_type": "DRAW_CARD",
+  "card_to_play": null,
+  "declared_color": null,
+  "call_uno": false,
+  "banter": "Guess I'll draw."
+}}
+
 Think step-by-step:
-- Can I play any card from my hand?
-- Which card is the most strategic? (e.g., change color, make opponent draw)
-- If playing a Wild, which color should I choose? (Ideally, a color I have more of, or to change from opponent's strong color).
-- If I can't play, I must draw.
+- Review your hand.
+- Review the discard top card and current game color.
+- Can I play any card from my hand? It must match color/value or be a Wild.
+- If playing a card, construct the "card_to_play" object with its "color" and "value".
+- Which card is the most strategic? (e.g., change color, make opponent draw, get rid of high-point cards).
+- If playing a Wild card (color "black"), I MUST provide a "declared_color". Choose a color that I have the most of in my remaining hand, or a strategic color.
+- If I can't play, I must choose "DRAW_CARD".
 Your goal is to empty your hand. Make sure your response is valid JSON.
 """
     llm_payload = {
@@ -223,13 +254,27 @@ Your goal is to empty your hand. Make sure your response is valid JSON.
 
 
     # 5. Execute AI's Chosen Action
-    if llm_action and llm_action.get("action_type") == "PLAY_CARD" and llm_action.get("card_guid_to_play"):
-        card_guid_to_play = llm_action.get("card_guid_to_play")
-        card_to_play_tuple = next(((idx, card) for idx, card in enumerate(ai_hand) if card["guid"] == card_guid_to_play), None)
+    if llm_action and llm_action.get("action_type") == "PLAY_CARD" and llm_action.get("card_to_play"):
+        card_to_play_from_llm = llm_action.get("card_to_play")
+
+        # Find the first matching card in AI's hand (LLM provides color and value)
+        # This assumes LLM picks a card it actually has. More robust validation could be added.
+        card_to_play_tuple = None
+        for idx, card_in_hand in enumerate(ai_hand):
+            if card_in_hand["color"] == card_to_play_from_llm.get("color") and \
+               card_in_hand["value"] == card_to_play_from_llm.get("value"):
+                card_to_play_tuple = (idx, card_in_hand)
+                break # Found the card
 
         if card_to_play_tuple:
             card_idx, played_card = card_to_play_tuple
-            print(f"AI ({ai_player_name}) plays: {played_card['color']} {played_card['value']} (GUID: {card_guid_to_play})")
+            print(f"AI ({ai_player_name}) attempts to play: {played_card['color']} {played_card['value']} (GUID: {played_card['guid']}) based on LLM choice: {card_to_play_from_llm}")
+
+            # Actual validation against game rules should happen here or be confirmed by is_valid_play
+            # For now, we trust the LLM picked a playable card from its hand and proceed to remove it.
+            # The is_valid_play check will happen in the calling context if this function is refactored
+            # or we assume LLM's choice is valid if it's in hand and matches basic rules.
+            # For simplicity here, we proceed with removal.
 
             player_hands[ai_player_name].pop(card_idx)
             discard_pile.append(played_card)
@@ -262,14 +307,24 @@ Your goal is to empty your hand. Make sure your response is valid JSON.
                 game_winner = ai_player_name
                 ai_last_banter += " And that's the game! I win!"
         else:
-            print(f"AI ({ai_player_name}) tried to play card GUID {card_guid_to_play}, but it's not in its hand. Defaulting to draw.")
-            llm_action = {"action_type": "DRAW_CARD"}
-            ai_last_banter = f"{original_banter_for_draw_action} AI seems to have misplaced a card... draws instead.".strip() if original_banter_for_draw_action else "AI seems to have misplaced a card... draws instead."
+            # LLM chose a card not in its hand or with incorrect properties
+            print(f"AI ({ai_player_name}) tried to play card {card_to_play_from_llm}, but it's not in its hand or invalid. Defaulting to draw.")
+            llm_action = {"action_type": "DRAW_CARD"} # Force draw
+            ai_last_banter = f"{original_banter_for_draw_action} AI seems to have imagined a card... draws instead.".strip() if original_banter_for_draw_action else "AI seems to have imagined a card... draws instead."
 
-
-    if not llm_action or llm_action.get("action_type") == "DRAW_CARD":
+    # Fallback to DRAW_CARD if action type is not PLAY_CARD or if PLAY_CARD failed validation above
+    if not llm_action or llm_action.get("action_type") != "PLAY_CARD" or not card_to_play_tuple: # card_to_play_tuple is None if play failed
         if not game_winner: # Don't draw if AI already won
-            print(f"AI ({ai_player_name}) chooses to draw a card (or defaulted to it).")
+            # Ensure action_type is DRAW_CARD if we fell through due to failed play
+            if llm_action and llm_action.get("action_type") == "PLAY_CARD": # Play failed
+                 print(f"AI ({ai_player_name}) failed its intended play, now defaulting to draw.")
+            else: # Was already DRAW_CARD or no action from LLM
+                 print(f"AI ({ai_player_name}) chooses to draw a card (or defaulted to it).")
+
+            # Update llm_action to be DRAW_CARD for consistent logging/banter if it was a failed PLAY_CARD
+            if not llm_action: llm_action = {} # Ensure llm_action exists
+            llm_action["action_type"] = "DRAW_CARD" # Standardize for drawing part
+
             # Reshuffle logic for AI draw
             if not game_deck:
                 if len(discard_pile) > 1:
